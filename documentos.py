@@ -200,3 +200,94 @@ def notificacao(oc_id: int, usuario: str) -> bytes:
     for linha in ("_______________________________________", "Fiscal Técnico do Contrato"):
         doc.add_paragraph(linha).alignment = WD_ALIGN_PARAGRAPH.CENTER
     return _bytes(doc)
+
+def termo_recebimento_provisorio(medicao_id: int, usuario: str) -> bytes:
+    """Gera o Termo de Recebimento Provisório da Medição Mensal (.docx)."""
+    m = db.um(
+        """SELECT m.*, c.empresa, c.cnpj, c.processo, c.pregao, c.numero AS contrato_num
+           FROM medicao m
+           JOIN contrato c ON c.id = m.contrato_id
+           WHERE m.id = ?""",
+        (medicao_id,),
+    )
+    
+    if not m:
+        raise ValueError("Medição não encontrada.")
+
+    # Consulta todas as OSs pertencentes a esta medição
+    oss = db.consultar(
+        """SELECT os.numero, os.emitida_em, os.setor, ci.codigo AS item_codigo,
+                  ci.descricao AS item_desc, mo.valor_atestado
+           FROM medicao_os mo
+           JOIN os ON os.id = mo.os_id
+           LEFT JOIN contrato_item ci ON ci.id = os.item_id
+           WHERE mo.medicao_id = ?
+           ORDER BY os.numero ASC""",
+        (medicao_id,),
+    )
+
+    doc = _base(
+        f"TERMO DE RECEBIMENTO PROVISÓRIO — MEDIÇÃO {m['numero']}",
+        f"Processo {m['processo']} · {m['pregao']} · Contrato {m['contrato_num']}",
+    )
+
+    _secao(doc, "1. Identificação do Período e Contratada")
+    _tabela(
+        doc,
+        ["Campo", "Informação"],
+        [
+            ("Contratada", f"{m['empresa']} (CNPJ {m['cnpj']})"),
+            ("Mês de referência", m["mes_referencia"]),
+            ("Período de apuração", f"{m['data_inicio']} a {m['data_fim']}"),
+            ("Valor total apurado", f"R$ {m['valor_total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")),
+            ("Observações", m["observacao"] or "Sem observações adicionais."),
+        ],
+        [5, 12],
+    )
+
+    _secao(doc, "2. Ordens de Serviço Consolidadas na Medição")
+    linhas_os = [
+        (
+            o["numero"],
+            o["emitida_em"],
+            o["setor"],
+            f"{o['item_codigo']} — {o['item_desc']}",
+            f"R$ {o['valor_atestado']:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+        )
+        for o in oss
+    ]
+    
+    _tabela(
+        doc,
+        ["Nº OS", "Emitida em", "Setor", "Item Contratual", "Valor Atestado"],
+        linhas_os or [("—",) * 5],
+        [3, 3, 4, 4, 3],
+    )
+
+    _secao(doc, "3. Atesto de Recebimento Provisório")
+    doc.add_paragraph(
+        "Atestamos, para fins do disposto no art. 140, inciso II, alínea 'a', da Lei nº 14.133/2021 "
+        "e do Ato Normativo ALECE nº 337/2023, que os serviços especificados nas Ordens de Serviço "
+        "relação acima foram prestados e conferidos provisoriamente, estando em conformidade com as "
+        "especificações técnicas do contrato."
+    )
+    
+    _nota(
+        doc,
+        "Este termo constitui o Recebimento Provisório da medição mensal para instrução da nota fiscal. "
+        "O pagamento permanece condicionado à verificação da regularidade fiscal e trabalhista da contratada."
+    )
+
+    doc.add_paragraph()
+    doc.add_paragraph(f"Fortaleza/CE, {datetime.now():%d/%m/%Y}.").alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    
+    doc.add_paragraph()
+    for linha in ("_______________________________________", "Fiscal Técnico do Contrato"):
+        doc.add_paragraph(linha).alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    rod = doc.add_paragraph(
+        f"Documento gerado pelo Sistema de Fiscalização de Contratos em {db.agora()} por {usuario}."
+    )
+    rod.runs[0].font.size = Pt(7)
+
+    return _bytes(doc)

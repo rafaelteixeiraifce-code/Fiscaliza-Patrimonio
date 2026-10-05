@@ -34,14 +34,18 @@ TIPOS_EVID = ["Foto", "Relatório técnico (1ª via)", "Relatório técnico (2ª
               "E-mail", "Nota fiscal", "Certidão", "Notificação", "Resposta da contratada", "Outro"]
 
 # ---------------------------------------------------------------- sidebar
+# ---------------------------------------------------------------- sidebar
 with st.sidebar:
     st.markdown('<div class="faixa"><b>📋 Fiscalização</b><br>Núcleo de Patrimônio · ALECE</div>',
                 unsafe_allow_html=True)
     usuario = st.text_input("Seu nome", value=st.session_state.get("usuario", ""),
                             placeholder="Quem está registrando")
     st.session_state["usuario"] = usuario
-    pagina = st.radio("Menu", ["Painel", "Ordens de Serviço", "Nova OS", "Ocorrências",
+    
+    # Linha atualizada com "Medição mensal":
+    pagina = st.radio("Menu", ["Painel", "Ordens de Serviço", "Nova OS", "Medição mensal", "Ocorrências",
                                "Contrato e prazos", "Auditoria"])
+    
     c = db.um("SELECT * FROM contrato WHERE id=1")
     st.caption(f"{c['pregao']} · {c['empresa']}")
 
@@ -401,3 +405,103 @@ elif pagina == "Auditoria":
     st.dataframe(log, hide_index=True, width="stretch")
     if not log.empty:
         st.download_button("Exportar CSV", log.to_csv(index=False).encode("utf-8-sig"), "auditoria.csv")
+
+
+elif pagina == "Medição mensal":
+    st.markdown('<div class="faixa"><b>Medição Mensal e Consolidação de Faturamento</b></div>', unsafe_allow_html=True)
+
+    tab_nova, tab_historica = st.tabs(["Nova Medição", "Histórico de Medições"])
+
+    with tab_nova:
+        st.subheader("1. Selecionar OS Atestadas para o Período")
+        elegiveis = db.listar_os_elegiveis_medicao(contrato_id=1)
+
+        if not elegiveis:
+            st.info("Não há Ordens de Serviço atestadas pendentes de medição no momento.")
+        else:
+            df_eleg = pd.DataFrame([
+                {
+                    "Selecionar": False,
+                    "ID": r["id"],
+                    "OS": r["numero"],
+                    "Emitida em": r["emitida_em"],
+                    "Item": f"{r['item_codigo']} — {r['item_descricao']}",
+                    "Setor": r["setor"],
+                    "Valor Atestado (R$)": r["valor_atestado"]
+                }
+                for r in elegiveis
+            ])
+
+            edited_df = st.data_editor(
+                df_eleg,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Selecionar": st.column_config.CheckboxColumn(default=False),
+                    "Valor Atestado (R$)" : st.column_config.NumberColumn(format="R$ %.2f")
+                },
+                disabled=["ID", "OS", "Emitida em", "Item", "Setor", "Valor Atestado (R$)"]
+            )
+
+            os_selecionadas = edited_df[edited_df["Selecionar"] == True]
+            total_medicao = os_selecionadas["Valor Atestado (R$)"].sum() if not os_selecionadas.empty else 0.0
+
+            st.markdown(f"### **Total da Medição Selecionada: {brl(total_medicao)}** ({len(os_selecionadas)} OS)")
+
+            if not os_selecionadas.empty:
+                st.subheader("2. Dados da Medição")
+                with st.form("form_medicao"):
+                    ano_mes_atual = date.today().strftime("%Y-%m")
+                    num_sug = f"MED-{date.today().strftime('%Y%m')}"
+
+                    c1, c2, c3 = st.columns(3)
+                    num_med = c1.text_input("Número da Medição", value=num_sug)
+                    mes_ref = c2.text_input("Mês de Referência (AAAA-MM)", value=ano_mes_atual)
+                    obs_med = c3.text_input("Observações", value="Medição mensal para atesto de faturamento")
+
+                    c4, c5 = st.columns(2)
+                    d_inicio = c4.date_input("Data de Início do Período", value=date.today().replace(day=1), format="DD/MM/YYYY")
+                    d_fim = c5.date_input("Data de Fim do Período", value=date.today(), format="DD/MM/YYYY")
+
+                    if st.form_submit_button("Fechar e Fechar Medição Mensal", type="primary"):
+                        ids_os = os_selecionadas["ID"].tolist()
+                        mes_id = db.criar_medicao_mensal(
+                            numero=num_med,
+                            contrato_id=1,
+                            mes_ref=mes_ref,
+                            data_inc=d_inicio.isoformat(),
+                            data_fim=d_fim.isoformat(),
+                            lista_os_ids=ids_os,
+                            usuario=usuario,
+                            obs=obs_med
+                        )
+                        st.success(f"Medição {num_med} gerada e consolidada com sucesso")
+                        st.rerun()
+
+        with tab_historica:
+            st.subheader("Histórico de Fechamentos Mensais")
+            medicoes = db.listar_medicoes(contrato_id=1)
+
+            if not medicoes:
+                st.info("Nenhuma medição foi fechada até o momento.")
+            else:
+                for m in medicoes:
+                    with st.container(border=True):
+                            c1, c2, c3 = st.columns([3, 2, 2])
+                    c1.markdown(f"**{m['numero']}** · Mês: `{m['mes_referencia']}`  \n"
+                                f"Período: {m['data_inicio']} a {m['data_fim']}  \n"
+                                f"*Obs:* {m['observacao'] or '—'}")
+                    c2.markdown(f"**Qtd. O.S.:** {m['qtd_os']}  \n"
+                                f"**Total:** {brl(m['valor_total'])}  \n"
+                                f"*Criado por:* {m['criado_por']} em {m['criado_em']}")
+
+                    # Gerar termo provisório (.docx)
+                    if hasattr(documentos, "termo_recebimento_provisorio"):
+                        c3.download_button(
+                            "📄 Baixar Termo Provisório (.docx)",
+                            documentos.termo_recebimento_provisorio(m["id"], usuario),
+                            f"Termo_Provisorio_{m['numero']}.docx",
+                            key=f"dl_med_{m['id']}"
+                        )
+                    else:
+                        c3.caption("Módulo de docx pronto para vincular")

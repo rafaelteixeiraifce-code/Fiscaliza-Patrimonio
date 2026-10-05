@@ -78,6 +78,28 @@ CREATE TABLE IF NOT EXISTS auditoria (
     id INTEGER PRIMARY KEY,
     quando TEXT, usuario TEXT, acao TEXT, detalhe TEXT
 );
+
+CREATE TABLE IF NOT EXISTS medicao (
+    id INTEGER PRIMARY KEY,
+    numero TEXT UNIQUE,
+    contrato_id INTEGER REFERENCES contrato(id),
+    mes_referencia TEXT,
+    data_inicio TEXT,
+    data_fim TEXT,
+    valor_total REAL,
+    status TEXT DEFAULT 'Em Aberto',
+    observacao TEXT,
+    criado_por TEXT,
+    criado_em TEXT
+);
+
+CREATE TABLE IF NOT EXISTS medicao_os (
+    id INTEGER PRIMARY KEY,
+    medicao_id INTEGER REFERENCES medicao(id),
+    os_id INTEGER REFERENCES os(id),
+    valor_atestado REAL,
+    UNIQUE(medicao_id, os_id)
+);
 """
 
 
@@ -172,3 +194,63 @@ def _semente(con):
             ("2027-04-13", "Fundação de Fortaleza"),
         ],
     )
+
+def listar_os_elegiveis_medicao(contrato_id: int = 1):
+    """Retorna O.S. com valor atestado e que ainda não foram consolidadas em medição."""
+    sql = """
+        SELECT os.*, ci.descricao as item_descricao, ci.codigo as item_codigo
+        FROM os
+        JOIN contrato_item ci ON os.item_id = ci.id
+        WHERE os.contrato_id = ?
+          AND os.cancelada = 0
+          AND os.valor_atestado > 0
+          AND os.id NOT IN (SELECT os_id FROM medicao_os)
+        ORDER BY os.emitida_em ASC
+    """
+    return consultar(sql, (contrato_id,))
+
+def criar_medicao_mensal(numero, contrato_id, mes_ref, data_inc, data_fim, lista_os_ids, usuario, obs=""):
+    """Cria a medição mensal e vincula as OS selecionadas."""
+    with conexao () as con:
+        placeholders = ",".join(["?"] * len(lista_os_ids))
+        res = con.execute(
+            f"SELECT SUM(valor_atestado) FROM os WHERE id IN ({placeholders})",
+            lista_os_ids
+        ).fetchone()
+        valor_total = res[0] if res and res[0] else 0.0
+
+        cur = con.execute(
+            """INSERT INTO medicao 
+               (numero, contrato_id, mes_referencia, data_inicio, data_fim, valor_total, criado_por, criado_em, observacao)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (numero, contrato_id, mes_ref, data_inc, data_fim, valor_total, usuario, agora(), obs)
+
+        )
+        medicao_id = cur.lastrowid
+
+        for os_id in lista_os_ids:
+            val = con.execute("SELECT valor_atestado FROM os WHERE id = ?", (os_id,)).fetchone()[0]
+            con.execute(
+                "INSERT INTO medicao_os (medicao_id, os_id, valor_atestado) VALUES (?, ?, ?)",
+                (medicao_id, os_id, val)
+            )
+
+        con.execute(
+            "INSERT INTO auditoria (quando, usuario, acao, detalhe) VALUES (?, ?, ?, ?)",
+            (agora(), usuario, "CRIAR_MEDICAO", f"Medição {numero} criada com {len(lista_os_ids)} OS Total: R$ {valor_total:.2f}")
+
+        )
+        return medicao_id
+
+
+def listar_medicoes(contrato_id: int = 1):
+    """Retorna o histórico de medições mensais."""
+    sql = """
+        SELECT m.*, COUNT(mo.os_id) as qtd_os
+        FROM medicao m
+        LEFT JOIN medicao_os mo ON m.id = mo.medicao_id
+        WHERE m.contrato_id = ?
+        GROUP BY m.id
+        ORDER BY m.mes_referencia DESC
+    """
+    return consultar(sql, (contrato_id,))
