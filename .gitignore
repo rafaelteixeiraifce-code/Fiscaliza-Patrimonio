@@ -1,0 +1,18 @@
+#Arquivos de bytecode e cache do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+#Ambiente virtual
+.venv/
+venv/
+ENV/
+
+#Banco de dados local e dados temporários
+dados/*.db
+*.sqlite3
+
+#Arquivos de sistema/IDE
+.vscode/
+.DS_Store
