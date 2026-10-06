@@ -264,6 +264,25 @@ def termo_recebimento_provisorio(medicao_id: int, usuario: str) -> bytes:
         [3, 3, 4, 4, 3],
     )
 
+    # Consulta se há checklist gravado para incluir no Termo Provisório
+    chk = db.obter_checklist_medicao(medicao_id)
+    if chk:
+        _secao(doc, "3. Verificação de Regularidade Fiscal e Trabalhista")
+        _tabela(
+            doc,
+            ["Item / Certidão", "Situação na Consulta"],
+            [
+                ("Regularidade Cadastral / SICAF", "REGULAR" if chk["sicaf_regular"] else "PENDENTE/IRREGULAR"),
+                ("CND Federal e Prev. Social (Receita/PGFN)", "VÁLIDA" if chk["cnd_federal_valida"] else "PENDENTE/IRREGULAR"),
+                ("CRF - FGTS (Caixa Econômica)", "VÁLIDA" if chk["fgts_valido"] else "PENDENTE/IRREGULAR"),
+                ("CNDT - Certidão Trabalhista (TST)", "VÁLIDA" if chk["cndt_valida"] else "PENDENTE/IRREGULAR"),
+                ("CND Estadual (SEFAZ)", "VÁLIDA" if chk["cnd_estadual_valida"] else "PENDENTE/IRREGULAR"),
+                ("CND Municipal (Prefeitura)", "VÁLIDA" if chk["cnd_municipal_valida"] else "PENDENTE/IRREGULAR"),
+                ("Resultado Final da Análise", chk["situacao_final"]),
+            ],
+            [9, 8],
+        )
+
     _secao(doc, "3. Atesto de Recebimento Provisório")
     doc.add_paragraph(
         "Atestamos, para fins do disposto no art. 140, inciso II, alínea 'a', da Lei nº 14.133/2021 "

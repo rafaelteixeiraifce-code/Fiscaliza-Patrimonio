@@ -479,23 +479,29 @@ elif pagina == "Medição mensal":
                         st.rerun()
 
         with tab_historica:
-            st.subheader("Histórico de Fechamentos Mensais")
+            st.subheader("Histórico de Fechamentos Mensais e Regularidade")
             medicoes = db.listar_medicoes(contrato_id=1)
 
             if not medicoes:
                 st.info("Nenhuma medição foi fechada até o momento.")
             else:
                 for m in medicoes:
+                    chk = db.obter_checklist_medicao(m["id"])
+
                     with st.container(border=True):
-                            c1, c2, c3 = st.columns([3, 2, 2])
+                        c1, c2, c3 = st.columns([3, 2, 2])
+
+                        sit_chk = f"🟢 {chk['situacao_final']}" if chk and chk['situacao_final'] == 'REGULAR' else ("🔴 IRREGULAR" if chk else "⚪ Não verificado")
+                    
                     c1.markdown(f"**{m['numero']}** · Mês: `{m['mes_referencia']}`  \n"
                                 f"Período: {m['data_inicio']} a {m['data_fim']}  \n"
+                                f"Regularidade Fiscal: **{sit_chk}**  \n"
                                 f"*Obs:* {m['observacao'] or '—'}")
                     c2.markdown(f"**Qtd. O.S.:** {m['qtd_os']}  \n"
                                 f"**Total:** {brl(m['valor_total'])}  \n"
                                 f"*Criado por:* {m['criado_por']} em {m['criado_em']}")
 
-                    # Gerar termo provisório (.docx)
+                    # Botões de ação
                     if hasattr(documentos, "termo_recebimento_provisorio"):
                         c3.download_button(
                             "📄 Baixar Termo Provisório (.docx)",
@@ -503,5 +509,36 @@ elif pagina == "Medição mensal":
                             f"Termo_Provisorio_{m['numero']}.docx",
                             key=f"dl_med_{m['id']}"
                         )
-                    else:
-                        c3.caption("Módulo de docx pronto para vincular")
+
+                    # Expander para preencher/visualizar o Checklist de 5 Certidões + SICAF
+                    with st.expander(f"📋 Checklist de Regularidade Fiscal/Trabalhista (SICAF / Certidões)", expanded=False):
+                        with st.form(f"form_chk_{m['id']}"):
+                            st.caption("Verificação de adimplência exigida para instrução do pagamento (art. 92, XVI, Lei 14.133/21).")
+                            
+                            col_a, col_b = st.columns(2)
+                            v_sicaf = col_a.checkbox("SICAF / Cadastral Regular", value=bool(chk["sicaf_regular"]) if chk else True, key=f"sic_{m['id']}")
+                            v_fed = col_a.checkbox("CND Federal / INSS (Receita/PGFN)", value=bool(chk["cnd_federal_valida"]) if chk else True, key=f"fed_{m['id']}")
+                            v_fgts = col_a.checkbox("CRF do FGTS (Caixa)", value=bool(chk["fgts_valido"]) if chk else True, key=f"fgt_{m['id']}")
+                            
+                            v_cndt = col_b.checkbox("CNDT (Trabalhista — TST)", value=bool(chk["cndt_valida"]) if chk else True, key=f"cnd_{m['id']}")
+                            v_est = col_b.checkbox("CND Estadual (SEFAZ)", value=bool(chk["cnd_estadual_valida"]) if chk else True, key=f"est_{m['id']}")
+                            v_mun = col_b.checkbox("CND Municipal (Prefeitura)", value=bool(chk["cnd_municipal_valida"]) if chk else True, key=f"mun_{m['id']}")
+                            
+                            obs_chk = st.text_input("Observações da consulta de certidões", value=chk["observacoes"] if chk else "", key=f"obs_c_{m['id']}")
+                            
+                            if st.form_submit_button("Salvar Checklist de Regularidade"):
+                                db.salvar_checklist_regularidade(
+                                    medicao_id=m["id"],
+                                    contrato_id=m["contrato_id"],
+                                    mes_ref=m["mes_referencia"],
+                                    sicaf=1 if v_sicaf else 0,
+                                    fed=1 if v_fed else 0,
+                                    fgts=1 if v_fgts else 0,
+                                    cndt=1 if v_cndt else 0,
+                                    est=1 if v_est else 0,
+                                    mun=1 if v_mun else 0,
+                                    obs=obs_chk,
+                                    usuario=usuario
+                                )
+                                st.success("Checklist de regularidade atualizado!")
+                                st.rerun()

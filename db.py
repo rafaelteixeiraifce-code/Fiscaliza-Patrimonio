@@ -17,6 +17,24 @@ EVID = Path(os.environ.get("FISCALIZA_EVID", DADOS / "evidencias"))
 DB_PATH = DADOS / "fiscaliza.db"
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS checklist_regularidade (
+    id INTEGER PRIMARY KEY,
+    medicao_id INTEGER REFERENCES medicao (id),
+    contrato_id INTEGER REFERENCES contrato(id),
+    mes_referencia TEXT,
+    sicaf_regular INTEGER,      -- 1 para Sim/Regular, 0 para Não
+    cnd_federal_valida INTEGER,
+    fgts_valido INTEGER,
+    cndt_valida INTEGER,
+    cnd_estadual_valida INTEGER,
+    cnd_municipal_valida INTEGER,
+    data_verificacao TEXT,
+    situacao_final TEXT,        -- 'REGULAR' ou 'IRREGULAR'
+    observacoes TEXT,
+    verificado_por TEXT,
+    verificado_em TEXT
+);
+
 CREATE TABLE IF NOT EXISTS contrato (
     id INTEGER PRIMARY KEY,
     numero TEXT, processo TEXT, pregao TEXT,
@@ -254,3 +272,47 @@ def listar_medicoes(contrato_id: int = 1):
         ORDER BY m.mes_referencia DESC
     """
     return consultar(sql, (contrato_id,))
+
+
+def salvar_checklist_regularidade(medicao_id, contrato_id, mes_ref, sicaf, fed, fgts, cndt, est, mun, obs, usuario):
+    """Salva ou atualiza a verificação de regularidade fiscal/trabalhista para uma medição."""
+    tudo_ok = all([sicaf, fed, fgts, cndt, est, mun])
+    situacao = "REGULAR" if tudo_ok else "IRREGULAR"
+
+    with conexao() as con:
+        #verifica se ja exist checklist para medição
+        existente = con.execute("SELECT id FROM checklist_regularidade WHERE medicao_id = ?", (medicao_id,)).fetchone()
+
+        if existente:
+            con.execute(
+                """UPDATE checklist_regularidade 
+                   SET sicaf_regular=?, cnd_federal_valida=?, fgts_valido=?, cndt_valida=?, 
+                       cnd_estadual_valida=?, cnd_municipal_valida=?, data_verificacao=?, 
+                       situacao_final=?, observacoes=?, verificado_por=?, verificado_em=?
+                   WHERE medicao_id=?""",
+                (sicaf, fed, fgts, cndt, est, mun, agora()[:10], situacao, obs, usuario, agora(), medicao_id)
+            )
+            chk_id = existente[0]
+
+        else:
+            cur = con.execute(
+                """INSERT INTO checklist_regularidade 
+                   (medicao_id, contrato_id, mes_referencia, sicaf_regular, cnd_federal_valida, 
+                    fgts_valido, cndt_valida, cnd_estadual_valida, cnd_municipal_valida, 
+                    data_verificacao, situacao_final, observacoes, verificado_por, verificado_em)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (medicao_id, contrato_id, mes_ref, sicaf, fed, fgts, cndt, est, mun,
+                 agora()[:10], situacao, obs, usuario, agora())
+            )
+            chk_id = cur.lastrowid
+
+        con.execute(
+            "INSERT INTO auditoria (quando, usuario, acao, detalhe) VALUES (?,?,?,?)",
+            (agora(), usuario, "CHECKLIST_REGULARIDADE", f"Medição #{medicao_id} ({mes_ref}): {situacao}")
+        )
+        return chk_id
+
+def obter_checklist_medicao(medicao_id: int):
+    """Retorna o checklist gravado para a medição."""
+    return um("SELECT * FROM checklist_regularidade WHERE medicao_id = ?", (medicao_id,))
+
